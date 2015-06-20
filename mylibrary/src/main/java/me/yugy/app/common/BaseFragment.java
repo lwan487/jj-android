@@ -1,19 +1,17 @@
 package me.yugy.app.common;
 
-import android.app.Activity;
-import android.support.v7.app.ActionBarActivity;
-import android.support.v7.app.AppCompatActivity;
+import android.support.v4.app.Fragment;
 
 import com.android.volley.Request;
 
 import me.yugy.app.common.network.RequestManager;
 
-public class BaseActivity extends AppCompatActivity {
+public class BaseFragment extends Fragment {
 
     private boolean mIsFirstResume = false;
 
     @Override
-    protected void onResume() {
+    public void onResume() {
         super.onResume();
         if (!mIsFirstResume) {
             mIsFirstResume = true;
@@ -26,26 +24,22 @@ public class BaseActivity extends AppCompatActivity {
 
     }
 
-    public Activity getActivity() {
-        return this;
-    }
-
     public void addRequest(Request request) {
         addRequest(request, this);
     }
 
     public void addRequest(Request request, Object tag) {
         request.setTag(tag);
-        RequestManager.getInstance(this).addRequest(request);
+        RequestManager.getInstance(getActivity()).addRequest(request);
     }
 
     public void cancelRequest(Request<?> request) {
-        RequestManager.getInstance(this).cancel(request);
+        RequestManager.getInstance(getActivity()).cancel(request);
     }
 
     @Override
-    protected void onDestroy() {
-        RequestManager.getInstance(this).cancelAll(this);
+    public void onDestroy() {
+        RequestManager.getInstance(getActivity()).cancelAll(this);
         super.onDestroy();
     }
 }
