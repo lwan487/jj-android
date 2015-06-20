@@ -17,16 +17,7 @@ public class DebugUtils {
     static int lineNumber;
 
     private static String createLog( String log ) {
-
-        StringBuffer buffer = new StringBuffer();
-        buffer.append("[");
-        buffer.append(methodName);
-        buffer.append(":");
-        buffer.append(lineNumber);
-        buffer.append("]");
-        buffer.append(log);
-
-        return buffer.toString();
+        return "[" + methodName + ":" + lineNumber + "]" + log;
     }
 
     private static void getMethodNames(StackTraceElement[] sElements){
@@ -49,6 +40,8 @@ public class DebugUtils {
                 Log.d(className, createLog(log.toString()));
             }else if(log instanceof byte[]){ //log byte array
                 Log.d(className, createLog(new String((byte[]) log)));
+            } else {
+                Log.d(className, createLog(log.toString()));
             }
         }
     }

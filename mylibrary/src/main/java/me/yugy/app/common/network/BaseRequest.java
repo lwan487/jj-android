@@ -18,6 +18,9 @@ public abstract class BaseRequest<T> extends Request<T>{
     }
 
     private static String buildUrl(String url, Param... params) {
+        if (params == null) {
+            return url;
+        }
         Uri.Builder builder = Uri.parse(url).buildUpon();
         for (Param param : params) {
             builder.appendQueryParameter(param.getKey(), param.getValue());

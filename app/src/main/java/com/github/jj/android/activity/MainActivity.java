@@ -6,11 +6,14 @@ import android.preference.PreferenceManager;
 import android.widget.TextView;
 
 import com.github.jj.android.R;
+import com.github.jj.android.service.MessageService;
 
 import butterknife.ButterKnife;
 import butterknife.InjectView;
 import butterknife.OnClick;
 import me.yugy.app.common.BaseActivity;
+import me.yugy.app.common.utils.MessageUtils;
+import me.yugy.app.common.utils.ServiceUtils;
 
 public class MainActivity extends BaseActivity {
 
@@ -27,15 +30,23 @@ public class MainActivity extends BaseActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        refreshState();
+    }
+
+    private void refreshState() {
         StringBuilder sb = new StringBuilder("Logined: ");
         SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(getActivity());
         if (preferences.contains("uid") && preferences.contains("token")
                 && preferences.contains("email") && preferences.contains("secret")) {
             sb.append(true + "\n");
-            sb.append("uid: ").append(preferences.getString("uid", "error"));
+            sb.append("uid: ").append(preferences.getString("uid", "error")).append("\n");
         } else {
-            sb.append(false);
+            sb.append(false).append("\n");
         }
+        sb.append("MessageService state: ");
+        sb.append(
+                ServiceUtils.isServiceRunning(getActivity(), MessageService.class)
+                        ? "running\n" : "not running\n");
         mInfo.setText(sb.toString());
     }
 
@@ -47,5 +58,17 @@ public class MainActivity extends BaseActivity {
     @OnClick(R.id.login)
     void onLoginClick() {
         LoginActivity.launch(getActivity());
+    }
+
+    @OnClick(R.id.start_service)
+    void onStartServiceClick() {
+        MessageService.start(getActivity());
+        refreshState();
+    }
+
+    @OnClick(R.id.stop_service)
+    void onStopServiceClick() {
+        MessageService.stop(getActivity());
+        refreshState();
     }
 }
