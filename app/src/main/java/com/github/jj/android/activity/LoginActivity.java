@@ -74,7 +74,7 @@ public class LoginActivity extends BaseActivity {
         addRequest(new LoginRequest(email, password, new Response.Listener<LoginResponse>() {
             @Override
             public void onResponse(LoginResponse response) {
-                if (response.isValidated()) {
+                if (response != null && response.isValidated()) {
                     switch (response.result) {
                         case Conf.RESULT_FAILED:
                             mEmailContainer.setError(response.reason);

@@ -72,7 +72,7 @@ public class RegisterActivity extends BaseActivity {
         addRequest(new RegisterRequest(email, password, new Response.Listener<RegisterResponse>() {
             @Override
             public void onResponse(RegisterResponse response) {
-                if (response.isValidated()) {
+                if (response != null && response.isValidated()) {
                     switch (response.result) {
                         case Conf.RESULT_FAILED:
                             mEmailContainer.setError(response.reason);
