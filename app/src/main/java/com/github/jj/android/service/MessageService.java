@@ -5,13 +5,16 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.AsyncTask;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.preference.PreferenceManager;
 import android.support.annotation.NonNull;
 
 import com.android.volley.Response;
 import com.android.volley.VolleyError;
 import com.github.jj.android.Conf;
+import com.github.jj.android.listener.PackListener;
 import com.github.jj.android.model.Pack;
 import com.github.jj.android.request.InitRequest;
 import com.github.jj.android.response.InitResponse;
@@ -21,12 +24,17 @@ import com.google.gson.stream.JsonReader;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.lang.ref.WeakReference;
 import java.net.InetSocketAddress;
+import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.Queue;
 import java.util.Set;
 
 import me.yugy.app.common.network.RequestManager;
@@ -43,19 +51,40 @@ public class MessageService extends Service {
         context.stopService(new Intent(context, MessageService.class));
     }
 
+    public static void write(Context context, Pack pack, PackListener listener) {
+        DebugUtils.log("Assign seq: " + sCurrentSeq);
+        listener.seq = sCurrentSeq;
+        pack.meta.seq = listener.seq;
+        sPackListeners.add(new WeakReference<>(listener));
+
+        Intent intent = new Intent(context, MessageService.class);
+        intent.putExtra("pack", pack);
+        intent.putExtra("type", "write");
+        context.startService(intent);
+    }
+
+    private static int sCurrentSeq = 0;
+    private static ArrayList<WeakReference<PackListener>> sPackListeners = new ArrayList<>();
+
     private String[] mManagerAddress;
     private String mToken;
     private String mUid;
+    private boolean mIsRunning = false;
     private ReadThread mReadThread;
     private WriteThread mWriteThread;
+    private Queue<Pack> mPackQueue;
+    private Handler mHandler;
 
     @Override
     public void onCreate() {
         super.onCreate();
         DebugUtils.log("onCreate");
+        mIsRunning = true;
+        mHandler = new Handler(Looper.getMainLooper());
         SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
         mToken = preferences.getString("token", "");
         mUid = preferences.getString("uid", "");
+        mPackQueue = new LinkedList<>();
         RequestManager.getInstance(this).addRequest(new InitRequest(mToken, mUid, new Response.Listener<InitResponse>() {
             @Override
             public void onResponse(InitResponse response) {
@@ -101,23 +130,42 @@ public class MessageService extends Service {
     private void handleIntent(Intent intent) {
         if (intent != null) {
             DebugUtils.log("handleIntent");
+            String type = intent.getStringExtra("type");
+            if (type == null) {
+                type = "";
+            }
+            switch (type) {
+                case "write":
+                    DebugUtils.log("write");
+                    Pack pack = intent.getParcelableExtra("pack");
+                    mPackQueue.offer(pack);
+                    break;
+            }
         }
     }
 
     @Override
     public void onTaskRemoved(Intent rootIntent) {
         DebugUtils.log("onTaskRemoved");
-        ReadThread.isRunning = false;
-        WriteThread.isRunning = false;
+        terminateThreads();
         super.onTaskRemoved(rootIntent);
     }
 
     @Override
     public void onDestroy() {
         DebugUtils.log("onDestroy");
-        ReadThread.isRunning = false;
-        WriteThread.isRunning = false;
+        terminateThreads();
         super.onDestroy();
+    }
+
+    private void terminateThreads() {
+        mIsRunning = false;
+        if (mReadThread != null && mReadThread.isAlive()) {
+            mReadThread.interrupt();
+        }
+        if (mWriteThread != null && mWriteThread.isAlive()) {
+            mWriteThread.interrupt();
+        }
     }
 
     @Override
@@ -150,83 +198,75 @@ public class MessageService extends Service {
         @Override
         protected void onPostExecute(SocketChannel socketChannel) {
             if (socketChannel != null) {
-                if (mReadThread != null && mReadThread.isAlive()) {
-                    ReadThread.isRunning = false;
-                    mReadThread.interrupt();
-                }
-                ReadThread.isRunning = true;
-                new ReadThread(mToken, socketChannel).start();
+                terminateThreads();
 
-                if (mWriteThread != null && mWriteThread.isAlive()) {
-                    WriteThread.isRunning = false;
-                    mWriteThread.interrupt();
-                }
-                WriteThread.isRunning = true;
-                new WriteThread(mToken, socketChannel).start();
+                mIsRunning = true;
+                mReadThread = new ReadThread(socketChannel);
+                mWriteThread = new WriteThread(socketChannel);
+
+                mReadThread.start();
+                mWriteThread.start();
             }
         }
     }
 
-    private static class WriteThread extends Thread {
+    private class WriteThread extends Thread {
 
-        public static boolean isRunning = false;
-
-        private final String mToken;
         private final SocketChannel mSocketChannel;
 
-        public WriteThread(String token, SocketChannel socketChannel) {
-            mToken = token;
+        public WriteThread(SocketChannel socketChannel) {
             mSocketChannel = socketChannel;
         }
 
         @Override
         public void run() {
-            DebugUtils.log("run");
-            ByteBuffer buffer = ByteBuffer.allocate(512);
+            DebugUtils.log("WriteThread run");
 
-            try {
-                buffer.clear();
-                Pack<String> pack = new Pack<>();
-                pack.meta = new Pack.Meta();
-                pack.meta.path = "debug.ping";
-                pack.write(mToken, buffer);
-                buffer.flip();
+            Pack pack;
+            while (mIsRunning) {
+                try {
+                    if ((pack = mPackQueue.poll()) != null) {
+                        DebugUtils.log("get pack to write, seq: " + pack.meta.seq);
+                        ByteBuffer buffer = pack.getBuffer(mToken);
+                        buffer.flip();
 
-                DebugUtils.log("buffer is ready.");
+                        DebugUtils.log("buffer is ready.");
 
-                while (buffer.hasRemaining()) {
-                    if (! mSocketChannel.finishConnect()) {
-                        continue;
+                        while (buffer.hasRemaining()) {
+                            if (!mSocketChannel.finishConnect()) {
+                                continue;
+                            }
+                            mSocketChannel.write(buffer);
+                        }
+                        sCurrentSeq++;
+                        DebugUtils.log("buffer has been written.");
                     }
-                    mSocketChannel.write(buffer);
+                    if (mPackQueue.size() == 0) {
+                        Thread.sleep(80);
+                    }
+                } catch (IOException | InterruptedException e) {
+                    e.printStackTrace();
                 }
-
-                DebugUtils.log("buffer has been written.");
-            } catch (IOException e) {
-                e.printStackTrace();
             }
 
         }
     }
 
-    private static class ReadThread extends Thread {
+    private class ReadThread extends Thread {
 
-        public static boolean isRunning = false;
-
-        private final String mToken;
         private final SocketChannel mSocketChannel;
 
-        private ReadThread(String token, SocketChannel socketChannel) {
-            mToken = token;
+        private ReadThread(SocketChannel socketChannel) {
             mSocketChannel = socketChannel;
         }
 
         @Override
         public void run() {
+            DebugUtils.log("ReadThread run");
             try {
                 Selector selector = Selector.open();
                 mSocketChannel.register(selector, SelectionKey.OP_READ);
-                while (isRunning) {
+                while (mIsRunning) {
                     if (!mSocketChannel.finishConnect()) {
                         continue;
                     }
@@ -235,16 +275,15 @@ public class MessageService extends Service {
                     Set<SelectionKey> selectedKeys = selector.selectedKeys();
                     Iterator<SelectionKey> keyIterator = selectedKeys.iterator();
 
-                    while(keyIterator.hasNext() && isRunning) {
+                    while(keyIterator.hasNext() && mIsRunning) {
 
                         SelectionKey key = keyIterator.next();
-                        if (key.isReadable() && isRunning) {
+                        if (key.isReadable() && mIsRunning) {
                             SocketChannel channel = (SocketChannel) key.channel();
                             ByteBuffer buffer = ByteBuffer.allocate(4);
                             channel.read(buffer);
                             buffer.flip();
                             int length = buffer.getInt();
-                            DebugUtils.log("Read, length: " + length);
                             buffer = ByteBuffer.allocate(length);
                             channel.read(buffer);
                             buffer.flip();
@@ -253,17 +292,39 @@ public class MessageService extends Service {
                             ByteArrayInputStream in = new ByteArrayInputStream(content);
                             JsonReader reader = new JsonReader(new InputStreamReader(in));
                             Pack.Meta meta = new Gson().fromJson(reader, Pack.Meta.class);
-                            DebugUtils.log(meta.seq);
-                            String body = new Gson().fromJson(reader, String.class);
-                            DebugUtils.log(body);
+                            DebugUtils.log("Read, length: " + length + ", seq: " + meta.seq);
+                            final String body = new Gson().fromJson(reader, String.class);
+
+                            dispatchSuccessAndRemove(meta, body);
                         }
 
                         keyIterator.remove();
                     }
                 }
-            } catch (IOException e) {
+            } catch (IOException | BufferUnderflowException e) {
+                if (e instanceof BufferUnderflowException) {
+                    terminateThreads();
+                    stopSelf();
+                }
                 e.printStackTrace();
             }
+        }
+    }
+
+    private void dispatchSuccessAndRemove(Pack.Meta meta, final Object body) {
+        Iterator<WeakReference<PackListener>> iterator = sPackListeners.iterator();
+        while (iterator.hasNext()) {
+            final WeakReference<PackListener> reference = iterator.next();
+            if (reference.get() != null && reference.get().seq == meta.seq) {
+                mHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        //noinspection unchecked
+                        reference.get().onSuccess(body);
+                    }
+                });
+            }
+            iterator.remove();
         }
     }
 }

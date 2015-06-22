@@ -6,6 +6,9 @@ import android.preference.PreferenceManager;
 import android.widget.TextView;
 
 import com.github.jj.android.R;
+import com.github.jj.android.listener.PackListener;
+import com.github.jj.android.model.Pack;
+import com.github.jj.android.model.Ping;
 import com.github.jj.android.service.MessageService;
 
 import butterknife.ButterKnife;
@@ -70,5 +73,24 @@ public class MainActivity extends BaseActivity {
     void onStopServiceClick() {
         MessageService.stop(getActivity());
         refreshState();
+    }
+
+    @OnClick(R.id.ping)
+    void onPingClick() {
+        Pack<Ping> pack = new Pack<>();
+        pack.body = new Ping();
+        pack.meta = new Pack.Meta();
+        pack.meta.path = "debug.ping";
+        MessageService.write(getActivity(), pack, new PackListener<String>() {
+            @Override
+            public void onSuccess(String result) {
+                MessageUtils.toast(getActivity(), result);
+            }
+
+            @Override
+            public void onFailed(Exception e) {
+
+            }
+        });
     }
 }
